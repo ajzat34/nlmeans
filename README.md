@@ -1,8 +1,9 @@
 # Image Denoiser (nlmeans, rust)
 The non-local means denoising algorithm searches the image for similar patches that can be averaged to eliminate noise. Each pixel is reconstructed as a weighted sum of all other nearby pixels, where the weight is determined based on the similarity of their immediate neighbors. Idealy, the entire image would be searched but the search is limited to nearby pixels to increase performance.
 
-![before](noisy.jpg)
-![before](out.png)
+![noisy image](noisy.jpg)
+![denoised sharper](denoised_sharper.png)
+![denoised softer](denoised_softer.png)
 
 ## possible improvements
 * add support for multi-threading
