@@ -14,26 +14,25 @@ pub fn nlmeans(
     // full size of windows
     let sample_size = 2 * sample_radius + 1;
     let search_size = 2 * search_radius + 1;
-    
+    // conversions
     let i_search_radius = search_radius as i32;
     let i_search_size = search_size as i32;
+    let usize_search_size = search_size as usize;
+    // distance from pixel to furthest compared pixel on one axis
+    let offset_size = sample_radius+search_radius;
 
+    // square and inverse the filtering parameter now
+    // so it doesn't need to be done inside nested loops
     let fp = (filter_param/255.0) * (sample_size as f32);
     let fp2 = fp*fp;
     let fp2inv = 1.0/fp2;
-
-    // distance from pixel to furthest compared pixel one one axis
-    let offset_size = sample_radius+search_radius;
 
     // pad original image so search window doesnt go out of bounds
     let img = pad_image(inp_image, offset_size);
     let mut out = Rgb32FImage::new(inp_width, inp_height);
 
-    let usearch = search_size as usize;
-    let mut weights_buff = vec![vec![0.0; usearch]; usearch];
-
     // create a gaussian distrabution LUT
-    let mut g_lut = vec![vec![0.0; usearch]; usearch];
+    let mut g_lut = vec![vec![0.0; usize_search_size]; usize_search_size];
     let n = Normal::new(0.0, search_radius as f64).unwrap();
     for iy in 0..i_search_size as i32 {
         for ix in 0..i_search_size {
@@ -45,18 +44,20 @@ pub fn nlmeans(
         }
     }
 
-    // per pixel denoising
-    for opy in 0..inp_height {
-        if opy % (inp_height/100) == 0 { println!("{}%", (opy*100)/inp_height); }
-        
-        for opx in 0..inp_width {
+    // create this now so it doesn't have to be reallocated in loop
+    let mut weights_buff = vec![vec![0.0; usize_search_size]; usize_search_size];
 
+    // main denoising loop
+    for opy in 0..inp_height {
+        // print progress 100 times per image
+        if opy as f64 % (inp_height as f64/100.0) <= 0.1 { println!("{}%", (opy*100)/inp_height); }
+        for opx in 0..inp_width {
             // account for padding
             let px = opx + offset_size;
             let py = opy + offset_size;
 
             // get similarity values for neighboring pixels
-            let mut q_acc = 0.0;
+            let mut q_acc = 0.0; // used for normalizing later
             for iy in 0..search_size {
                 for ix in 0..search_size {
                     // center the search area on the pixel
@@ -65,16 +66,16 @@ pub fn nlmeans(
 
                     let uix = ix as usize;
                     let uiy = iy as usize;
-                    // check the gaussian table
-                    let gauss = g_lut[uiy][uix];
 
                     // how similar this area is
+                    let gauss = g_lut[uiy][uix];
                     let q = gauss*compare_samples(&img, px, py, cx, cy, sample_size, sample_radius, fp2inv);
                     weights_buff[uiy][uix] = q;
                     q_acc += q;
                 }
             }
 
+            // corresponding pixel in output image
             let out_pixel = out.get_pixel_mut(opx, opy).channels_mut();
 
             // recalculate value of this pixel as weighted sum of neighboring pixels
@@ -88,6 +89,7 @@ pub fn nlmeans(
                 }
             }
 
+            // normalize value and update output pixel
             for i in 0..=2 {
                 out_pixel[i] = f32::clamp(out_pixel[i] / q_acc, 0.0, 1.0);
             }
@@ -97,6 +99,7 @@ pub fn nlmeans(
     out
 }
 
+// the RMS (root-mean-square) of the differences normalized with a weighing function (e^(rms^2/fp^2))
 fn compare_samples(
     img: &Rgb32FImage,
     ax: u32,        // center of window a
@@ -108,26 +111,29 @@ fn compare_samples(
     fp2inv: f32,    // inverse of filtering parameter squared
 ) -> f32
 {
+    // skip comparing a pixel to itself
     if (ax == bx) && (ay == by) {return 1.0;}
 
     let a = img.view(ax-radius, ay-radius, size, size);
     let b = img.view(bx-radius, by-radius, size, size);
 
-    let mut sum = 0.0;
+    let mut sum_of_squares = 0.0;
     for iy in 0..size {
         for ix in 0..size {
             let pa = a.get_pixel(ix, iy);
             let pb = b.get_pixel(ix, iy);
             for i in 0..=2 {
                 let diff = pa[i] - pb[i];
-                sum += diff*diff;
+                sum_of_squares += diff*diff;
             }
         }
     }
 
-    std::f32::consts::E.powf(-sum*fp2inv)
+    // weighing function
+    std::f32::consts::E.powf(-sum_of_squares*fp2inv)
 }
 
+// add padding around the image - could be improved by reflecting the image instead of adding black borders
 pub fn pad_image<I, P, S>(img: &I, padding: u32) -> ImageBuffer<P, Vec<S>>
 where
     I: GenericImageView<Pixel = P>,
