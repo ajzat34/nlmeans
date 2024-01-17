@@ -1,0 +1,1 @@
+cargo run --release -- -i noisy.jpg -o out.png -p 3 -s 10 -f 25
